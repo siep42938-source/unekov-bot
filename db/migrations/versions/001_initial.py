@@ -233,16 +233,16 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.PrimaryKeyConstraint('id'),
     )
-    op.create_index('ix_indexed_records_source_file', 'indexed_records', ['source_file'])
-    op.create_index('ix_indexed_records_source_tag', 'indexed_records', ['source_tag'])
-    op.create_index('ix_indexed_records_tg_id', 'indexed_records', ['tg_id'])
-    op.create_index('ix_indexed_records_phone', 'indexed_records', ['phone'])
-    op.create_index('ix_indexed_records_username', 'indexed_records', ['username'])
-    op.create_index('ix_indexed_records_email', 'indexed_records', ['email'])
+    op.create_index('ix_indexed_records_source_file', 'indexed_records', ['source_file'], if_not_exists=True)
+    op.create_index('ix_indexed_records_source_tag', 'indexed_records', ['source_tag'], if_not_exists=True)
+    op.create_index('ix_indexed_records_tg_id', 'indexed_records', ['tg_id'], if_not_exists=True)
+    op.create_index('ix_indexed_records_phone', 'indexed_records', ['phone'], if_not_exists=True)
+    op.create_index('ix_indexed_records_username', 'indexed_records', ['username'], if_not_exists=True)
+    op.create_index('ix_indexed_records_email', 'indexed_records', ['email'], if_not_exists=True)
     # GIN full-text search index (PostgreSQL + pg_trgm extension required)
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     op.execute("""
-        CREATE INDEX ix_indexed_records_fts
+        CREATE INDEX IF NOT EXISTS ix_indexed_records_fts
         ON indexed_records
         USING gin (raw gin_trgm_ops)
     """)

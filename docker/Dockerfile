@@ -17,4 +17,4 @@ COPY . .
 RUN mkdir -p logs uploads
 
 # Run migrations then start bot
-CMD ["sh", "-c", "alembic upgrade head && python main.py"]
+CMD ["sh", "-c", "python main.py"]
