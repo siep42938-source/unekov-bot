@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 from typing import List
 from functools import lru_cache
 
@@ -38,6 +38,16 @@ class Settings(BaseSettings):
 
     # Admin
     admin_ids: List[int] = Field(default_factory=list, env="ADMIN_IDS")
+
+    @field_validator("admin_ids", mode="before")
+    @classmethod
+    def parse_admin_ids(cls, v):
+        if isinstance(v, (int, float)):
+            return [int(v)]
+        if isinstance(v, str):
+            # "123456,789012" или "123456"
+            return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return v
 
     # Tokens
     free_tokens_on_register: int = Field(100, env="FREE_TOKENS_ON_REGISTER")

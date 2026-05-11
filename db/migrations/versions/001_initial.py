@@ -218,8 +218,39 @@ def upgrade() -> None:
         sa.UniqueConstraint('key_hash'),
     )
 
+    op.create_table('indexed_records',
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column('source_file', sa.String(256), nullable=False),
+        sa.Column('source_tag', sa.String(64), nullable=False),
+        sa.Column('tg_id', sa.String(32), nullable=True),
+        sa.Column('phone', sa.String(32), nullable=True),
+        sa.Column('username', sa.String(128), nullable=True),
+        sa.Column('first_name', sa.String(128), nullable=True),
+        sa.Column('last_name', sa.String(128), nullable=True),
+        sa.Column('email', sa.String(256), nullable=True),
+        sa.Column('raw', sa.Text(), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_indexed_records_source_file', 'indexed_records', ['source_file'])
+    op.create_index('ix_indexed_records_source_tag', 'indexed_records', ['source_tag'])
+    op.create_index('ix_indexed_records_tg_id', 'indexed_records', ['tg_id'])
+    op.create_index('ix_indexed_records_phone', 'indexed_records', ['phone'])
+    op.create_index('ix_indexed_records_username', 'indexed_records', ['username'])
+    op.create_index('ix_indexed_records_email', 'indexed_records', ['email'])
+    # GIN full-text search index (PostgreSQL + pg_trgm extension required)
+    op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+    op.execute("""
+        CREATE INDEX ix_indexed_records_fts
+        ON indexed_records
+        USING gin (raw gin_trgm_ops)
+    """)
+
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS ix_indexed_records_fts")
+    op.drop_table('indexed_records')
     op.drop_table('api_keys')
     op.drop_table('datasets')
     op.drop_table('audit_logs')
