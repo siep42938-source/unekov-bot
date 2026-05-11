@@ -1,12 +1,15 @@
 """
 Unekov.help — AI OSINT Analytical Bot
-Entry point: runs Telegram bot in polling mode (dev) or webhook+FastAPI (prod).
+Entry point: FastAPI + webhook (production/Render) или polling (dev).
 """
 import asyncio
 import logging
 import sys
 import os
+from contextlib import asynccontextmanager
 
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -32,12 +35,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── Storage (Redis если доступен, иначе Memory) ───────────────────────────────
+# ── Storage ───────────────────────────────────────────────────────────────────
 def get_storage():
     try:
         from aiogram.fsm.storage.redis import RedisStorage
-        import redis.asyncio as aioredis
-        # Проверяем доступность Redis
         storage = RedisStorage.from_url(settings.redis_url)
         logger.info("✅ Storage: Redis")
         return storage
@@ -54,19 +55,15 @@ bot = Bot(
 storage = get_storage()
 dp = Dispatcher(storage=storage)
 
-# Middlewares
 dp.message.middleware(RateLimitMiddleware())
 dp.callback_query.middleware(RateLimitMiddleware())
 dp.message.middleware(AuthMiddleware())
 dp.callback_query.middleware(AuthMiddleware())
-
-# Handlers
 dp.include_router(main_router)
 
 
 # ── Seed default data ─────────────────────────────────────────────────────────
 async def seed_default_data():
-    """Создаёт дефолтные инструменты и источники БД при первом запуске."""
     from db.database import AsyncSessionLocal
     from db.models import Tool
     from db.models.database_source import DatabaseSource, DEFAULT_SOURCES
@@ -92,66 +89,79 @@ async def seed_default_data():
     logger.info("✅ Default data seeded")
 
 
-# ── Polling mode (dev / local) ────────────────────────────────────────────────
+# ── Polling (dev) ─────────────────────────────────────────────────────────────
 async def run_polling():
-    logger.info("🚀 Unekov.help starting in POLLING mode...")
+    logger.info("🚀 Starting in POLLING mode...")
     await init_db()
     await seed_default_data()
     logger.info(f"🤖 Bot: @{(await bot.get_me()).username}")
-    logger.info("✅ Ready! Press Ctrl+C to stop.")
+    logger.info("✅ Ready!")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
-# ── Webhook + FastAPI mode (production) ───────────────────────────────────────
-async def run_webhook():
-    from fastapi import FastAPI, Request
-    from fastapi.middleware.cors import CORSMiddleware
-    from contextlib import asynccontextmanager
-    import uvicorn
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        await init_db()
-        await seed_default_data()
+# ── FastAPI app (production / Render) ─────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    await seed_default_data()
+    webhook_url = settings.webhook_url
+    if webhook_url:
         await bot.set_webhook(
-            url=f"{settings.webhook_url}/webhook",
+            url=f"{webhook_url}/webhook",
             allowed_updates=dp.resolve_used_update_types(),
         )
-        logger.info(f"🚀 Webhook set: {settings.webhook_url}/webhook")
-        yield
-        await bot.delete_webhook()
-
-    app = FastAPI(title="Unekov.help", lifespan=lifespan)
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-    # API роутеры
-    try:
-        from api.routers import api_router
-        app.include_router(api_router, prefix="/api/v1")
-    except Exception as e:
-        logger.warning(f"API routers not loaded: {e}")
-
-    @app.post("/webhook")
-    async def webhook(request: Request):
-        from aiogram.types import Update
-        import json
-        body = await request.body()
-        update = Update.model_validate(json.loads(body))
-        await dp.feed_update(bot, update)
-        return {"ok": True}
-
-    @app.get("/health")
-    async def health():
-        return {"status": "ok", "bot": "Unekov.help"}
-
-    config = uvicorn.Config(app=app, host=settings.api_host, port=settings.api_port)
-    server = uvicorn.Server(config)
-    await server.serve()
+        logger.info(f"🚀 Webhook set: {webhook_url}/webhook")
+    else:
+        # Render: запускаем polling в фоне
+        logger.info("🚀 No WEBHOOK_URL — starting polling in background...")
+        asyncio.create_task(
+            dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        )
+    yield
+    await bot.session.close()
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+app = FastAPI(title="Unekov.help", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# API роутеры
+try:
+    from api.routers import api_router
+    app.include_router(api_router, prefix="/api/v1")
+except Exception as e:
+    logger.warning(f"API routers not loaded: {e}")
+
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    from aiogram.types import Update
+    import json
+    body = await request.body()
+    update = Update.model_validate(json.loads(body))
+    await dp.feed_update(bot, update)
+    return {"ok": True}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "bot": "Unekov.help"}
+
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
+
+# ── Entry point (локальный запуск) ────────────────────────────────────────────
 if __name__ == "__main__":
     if settings.webhook_url and settings.is_production:
-        asyncio.run(run_webhook())
+        import uvicorn
+        port = int(os.environ.get("PORT", settings.api_port))
+        uvicorn.run("main:app", host="0.0.0.0", port=port)
     else:
         asyncio.run(run_polling())
